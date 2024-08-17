@@ -1,109 +1,258 @@
 package com.demo
 
-import android.Manifest.permission.READ_CONTACTS
-import android.Manifest.permission.WRITE_CONTACTS
-import android.content.ContentProviderOperation
-import android.content.pm.PackageManager
+import android.app.AlertDialog
+import android.content.ContentUris
+import android.content.ContentValues
+import android.content.Context
+import android.database.Cursor
 import android.os.Bundle
 import android.provider.ContactsContract
-import android.widget.TextView
-import androidx.activity.enableEdgeToEdge
+import android.util.Log
+import android.view.LayoutInflater
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
+import androidx.recyclerview.widget.LinearLayoutManager
 import com.demo.databinding.ActivityMainBinding
+import com.demo.databinding.DialogAddContactBinding
+import com.demo.databinding.DialogUpdateContactBinding
 
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
+    private lateinit var contactAdapter: ContactsAdapter
+    private lateinit var contactList: MutableList<Contact>
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        binding.convertButton.setOnClickListener {
-            checkPermission()
+        contactList = getContacts(this).toMutableList()
+
+        // Khởi tạo danh bạ và adapter
+        contactAdapter =
+            ContactsAdapter(
+                context = this,
+                contactList,
+                onItemClick = { contact ->
+                    showUpdateDialog(contact)
+                },
+                onConvertClick = {
+                    binding.btnConvert.isEnabled = contactAdapter.isAnyChecked()
+                },
+            )
+
+        binding.recyclerView.layoutManager = LinearLayoutManager(this)
+        binding.recyclerView.adapter = contactAdapter
+
+        binding.fab.setOnClickListener {
+            showAddContactDialog()
+        }
+
+        binding.btnConvert.setOnClickListener {
+            convertSelectedContacts()
         }
     }
 
-    private fun checkPermission() {
-        if (ContextCompat.checkSelfPermission(this,READ_CONTACTS)
-            != PackageManager.PERMISSION_GRANTED || ContextCompat.checkSelfPermission(
-                this, WRITE_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this, arrayOf(READ_CONTACTS, WRITE_CONTACTS), 1)
-        } else {
-            loadContacts()
-        }
-    }
+    // Hiển thị dialog để thêm liên hệ mới
+    private fun showAddContactDialog() {
+        val dialogBinding = DialogAddContactBinding.inflate(LayoutInflater.from(this))
+        val builder =
+            AlertDialog
+                .Builder(this)
+                .setView(dialogBinding.root)
+                .setTitle("Add Contact")
 
-    private fun loadContacts() {
-        val contactsList  = mutableListOf<Pair<String, String>>()
-        val contentResolver = contentResolver
-        val cursor = contentResolver.query(
-            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-            null,
-            null,
-            null,
-            null,
-        )
-        cursor?.let {
-            val idIndex = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.CONTACT_ID)
-            val numberIndex = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
-            while (it.moveToNext()) {
-                val contactId = it.getString(idIndex)
-                val number = it.getString(numberIndex)
-                contactsList.add(Pair(contactId, number))
-            }
-            it.close()
-        }
-        convertPhoneNumbers(contactsList)
-    }
-
-    private fun convertPhoneNumbers(contactsList: List<Pair<String, String>>) {
-        val operations = ArrayList<ContentProviderOperation>()
-
-        contactsList.forEach { (contactId, phoneNumber) ->
-            // Loại bỏ tất cả khoảng trắng và ký tự không phải là số
-            val cleanedNumber = phoneNumber.replace(Regex("[^0-9]"), "")
-
-            val convertedNumber = when {
-                cleanedNumber.startsWith("016") -> "03${cleanedNumber.substring(3)}"
-                cleanedNumber.startsWith("8416") -> "03${cleanedNumber.substring(4)}"
-                else -> null
-            }
-
-            if (convertedNumber != null) {
-                operations.add(
-                    ContentProviderOperation.newUpdate(ContactsContract.Data.CONTENT_URI)
-                        .withSelection(
-                            "${ContactsContract.CommonDataKinds.Phone.CONTACT_ID} = ? AND ${ContactsContract.CommonDataKinds.Phone.NUMBER} = ?",
-                            arrayOf(contactId, phoneNumber)
-                        )
-                        .withValue(ContactsContract.CommonDataKinds.Phone.NUMBER, convertedNumber)
-                        .build()
-                )
+        builder.setPositiveButton("Add") { _, _ ->
+            val name = dialogBinding.editName.text.toString()
+            val phoneNumber = dialogBinding.editPhone.text.toString()
+            if (name.isNotEmpty() && phoneNumber.isNotEmpty()) {
+                addContact(this, name, phoneNumber)
+                refreshContacts()
             }
         }
 
-        try {
-            // Áp dụng các thay đổi vào danh bạ
-            contentResolver.applyBatch(ContactsContract.AUTHORITY, operations)
-            binding.contactsTextView.text = "Phone numbers converted successfully."
-        } catch (e: Exception) {
-            e.printStackTrace()
-            binding.contactsTextView.text = "Failed to convert phone numbers."
-        }
+        builder.setNegativeButton("Cancel", null)
+
+        builder.create().show()
     }
 
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
+    private fun addContact(
+        context: Context,
+        name: String,
+        phoneNumber: String,
     ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if(requestCode == 1 && grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED){
-            loadContacts()
+        val contentResolver = context.contentResolver
+
+        val values =
+            ContentValues().apply {
+                put(ContactsContract.RawContacts.ACCOUNT_TYPE, null as String?)
+                put(ContactsContract.RawContacts.ACCOUNT_NAME, null as String?)
+            }
+        val uri = contentResolver.insert(ContactsContract.RawContacts.CONTENT_URI, values)
+        val rawContactId = ContentUris.parseId(uri!!)
+
+        // Tên
+        val nameValues =
+            ContentValues().apply {
+                put(ContactsContract.Data.RAW_CONTACT_ID, rawContactId)
+                put(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE)
+                put(ContactsContract.CommonDataKinds.StructuredName.DISPLAY_NAME, name)
+            }
+        contentResolver.insert(ContactsContract.Data.CONTENT_URI, nameValues)
+
+        // Số điện thoại
+        val phoneValues =
+            ContentValues().apply {
+                put(ContactsContract.Data.RAW_CONTACT_ID, rawContactId)
+                put(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE)
+                put(ContactsContract.CommonDataKinds.Phone.NUMBER, phoneNumber)
+                put(ContactsContract.CommonDataKinds.Phone.TYPE, ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE)
+            }
+        contentResolver.insert(ContactsContract.Data.CONTENT_URI, phoneValues)
+        /*// Thêm liên hệ vào danh sách hiển thị và cập nhật RecyclerView
+        val newContact = Contact(id = rawContactId, name = name, phoneNumber = phoneNumber)
+        contactList.add(newContact)
+        contactAdapter.notifyItemInserted(contactList.size - 1)*/
+    }
+
+    // Hiển thị dialog để cập nhật liên hệ
+    private fun showUpdateDialog(contact: Contact) {
+        val dialogBinding = DialogUpdateContactBinding.inflate(LayoutInflater.from(this))
+        val builder =
+            AlertDialog
+                .Builder(this)
+                .setView(dialogBinding.root)
+                .setTitle("Update Contact")
+
+        dialogBinding.editName.setText(contact.name)
+        dialogBinding.editPhone.setText(contact.phoneNumber)
+
+        builder.setPositiveButton("Update") { _, _ ->
+            val newName = dialogBinding.editName.text.toString()
+            val newPhoneNumber = dialogBinding.editPhone.text.toString()
+            updateContact(this, contact.id, newName, newPhoneNumber)
+            refreshContacts()
         }
+
+        builder.setNegativeButton("Cancel", null)
+
+        builder.create().show()
+    }
+
+    private fun updateContact(
+        context: Context,
+        contactId: Long,
+        newName: String,
+        newPhoneNumber: String,
+    ) {
+        val contentResolver = context.contentResolver
+
+        // Cập nhật tên
+        val nameValues =
+            ContentValues().apply {
+                put(ContactsContract.CommonDataKinds.StructuredName.DISPLAY_NAME, newName)
+            }
+        contentResolver.update(
+            ContactsContract.Data.CONTENT_URI,
+            nameValues,
+            "${ContactsContract.Data.RAW_CONTACT_ID}=? AND ${ContactsContract.Data.MIMETYPE}=?",
+            arrayOf(contactId.toString(), ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE),
+        )
+
+        // Cập nhật số điện thoại
+        val phoneValues =
+            ContentValues().apply {
+                put(ContactsContract.CommonDataKinds.Phone.NUMBER, newPhoneNumber)
+            }
+        contentResolver.update(
+            ContactsContract.Data.CONTENT_URI,
+            phoneValues,
+            "${ContactsContract.Data.RAW_CONTACT_ID}=? AND ${ContactsContract.Data.MIMETYPE}=?",
+            arrayOf(contactId.toString(), ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE),
+        )
+        /*// Lấy lại danh sách liên hệ mới từ danh bạ
+        val updatedContactList = getContacts(context)
+
+        // Cập nhật danh sách liên hệ và thông báo cho RecyclerView
+        contactList.clear()
+        contactList.addAll(updatedContactList)
+        contactAdapter.notifyDataSetChanged()*/
+    }
+
+    fun showDeleteDialog(contact: Contact) {
+        val builder =
+            AlertDialog
+                .Builder(this)
+                .setTitle("Delete Contact")
+                .setMessage("Are you sure you want to delete ${contact.name}?")
+                .setPositiveButton("Delete") { _, _ ->
+                    deleteContact(this, contact.id)
+                    refreshContacts()
+                }.setNegativeButton("Cancel", null)
+        builder.create().show()
+    }
+
+    private fun deleteContact(
+        context: Context,
+        contactId: Long,
+    ) {
+        val contentResolver = context.contentResolver
+        contentResolver.delete(
+            ContactsContract.RawContacts.CONTENT_URI,
+            "${ContactsContract.RawContacts.CONTACT_ID}=?",
+            arrayOf(contactId.toString()),
+        )
+        /*val index = contactList.indexOfFirst { it.id == contactId }
+        if (index != -1) {
+            contactList.removeAt(index)
+            contactAdapter.notifyItemRemoved(index)
+        }*/
+    }
+
+    private fun refreshContacts() {
+        contactList.clear()
+        contactList.addAll(getContacts(this))
+        contactAdapter.notifyDataSetChanged()
+    }
+
+    private fun convertSelectedContacts()  {
+        for ((index, contact) in contactList.withIndex()) {
+            if (contactAdapter.isAnyChecked())
+                {
+                    contactList[index].phoneNumber = convertPhoneNumber(contact.phoneNumber)
+                }
+        }
+        contactAdapter.notifyDataSetChanged()
+    }
+
+    private fun convertPhoneNumber(phoneNumber: String): String =
+        when {
+            phoneNumber.startsWith("016") -> phoneNumber.replaceFirst("016", "03")
+            phoneNumber.startsWith("8416") -> phoneNumber.replaceFirst("8416", "03")
+            else -> phoneNumber
+        }
+
+    private fun getContacts(context: Context): List<Contact> {
+        val contactList = mutableListOf<Contact>()
+        val contentResolver = context.contentResolver
+        val cursor: Cursor? =
+            contentResolver.query(
+                ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                null,
+                null,
+                null,
+                null,
+            )
+        cursor?.use {
+            while (it.moveToNext()) {
+                val id = it.getLong(it.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.CONTACT_ID))
+                val name = it.getString(it.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)) ?: "No name"
+                val phoneNumber = it.getString(it.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER)) ?: "No phone number"
+                contactList.add(Contact(id, name, phoneNumber))
+            }
+        } ?: run {
+            // Xử lý khi cursor là null
+            Log.e("getContacts", "Cursor is null, unable to query contacts")
+        }
+        return contactList
     }
 }
