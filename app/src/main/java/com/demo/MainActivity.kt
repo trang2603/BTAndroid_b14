@@ -169,13 +169,6 @@ class MainActivity : AppCompatActivity() {
             "${ContactsContract.Data.RAW_CONTACT_ID}=? AND ${ContactsContract.Data.MIMETYPE}=?",
             arrayOf(contactId.toString(), ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE),
         )
-        /*// Lấy lại danh sách liên hệ mới từ danh bạ
-        val updatedContactList = getContacts(context)
-
-        // Cập nhật danh sách liên hệ và thông báo cho RecyclerView
-        contactList.clear()
-        contactList.addAll(updatedContactList)
-        contactAdapter.notifyDataSetChanged()*/
     }
 
     fun showDeleteDialog(contact: Contact) {
@@ -201,11 +194,6 @@ class MainActivity : AppCompatActivity() {
             "${ContactsContract.RawContacts.CONTACT_ID}=?",
             arrayOf(contactId.toString()),
         )
-        /*val index = contactList.indexOfFirst { it.id == contactId }
-        if (index != -1) {
-            contactList.removeAt(index)
-            contactAdapter.notifyItemRemoved(index)
-        }*/
     }
 
     private fun refreshContacts() {
@@ -214,12 +202,21 @@ class MainActivity : AppCompatActivity() {
         contactAdapter.notifyDataSetChanged()
     }
 
-    private fun convertSelectedContacts()  {
-        for ((index, contact) in contactList.withIndex()) {
-            if (contactAdapter.isAnyChecked())
-                {
-                    contactList[index].phoneNumber = convertPhoneNumber(contact.phoneNumber)
-                }
+    private fun convertSelectedContacts() {
+        /*for ((index, contact) in contactList.withIndex()) {
+            if (contactAdapter.isAnyChecked()) {
+                contactList[index].phoneNumber = convertPhoneNumber(contact.phoneNumber)
+                updateContact(this, contact.id, contact.name, convertPhoneNumber((contact.phoneNumber)))
+            }
+        }
+        contactAdapter.notifyDataSetChanged()*/
+
+        val selectedContacts = contactAdapter.getSelectedContacts()
+        for (contact in selectedContacts) {
+            val newPhoneNumber = convertPhoneNumber(contact.phoneNumber)
+            contact.phoneNumber = newPhoneNumber
+            // Cập nhật lại contact với số điện thoại mới
+            updateContact(this, contact.id, contact.name, newPhoneNumber)
         }
         contactAdapter.notifyDataSetChanged()
     }
